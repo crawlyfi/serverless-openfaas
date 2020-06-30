@@ -3,13 +3,16 @@
 
 'use strict';
 
-const {spawn} = require('child_process');
+const {
+	spawn
+} = require('child_process');
 const _ = require('lodash');
 const BbPromise = require('bluebird');
 const promisify = require('../promisify-spawn');
 const listeners = require('../spawn-listener');
 
 class OpenFaasDeploy {
+
 	constructor(serverless, options) {
 		this.serverless = serverless;
 		this.options = options || {};
@@ -21,9 +24,16 @@ class OpenFaasDeploy {
 					'deploy'
 				],
 				options: {
-          push: {
-            usage: 'Push image to Docker repository',
-          },
+					pushAndScaleZero: {
+						usage: 'Push image to Docker repository and allow scale to zero',
+						shortcut: 'z'
+
+					},
+					push: {
+						usage: 'Push image to Docker repository',
+						shortcut: 'p'
+
+					},
 					function: {
 						usage: 'Deploy a single OpenFaaS function',
 						shortcut: 'f'
@@ -50,38 +60,61 @@ class OpenFaasDeploy {
 
 		this.hooks = {
 			'deploy:deploy': (() => {
-        if (this.options.push) {
-          BbPromise.bind(this).then(this.pushFunction).then(this.deployFunction);
-        } else {
-          BbPromise.bind(this).then(this.deployFunction);
-        }
-      }),
+				if (this.options.pushAndScaleZero) {
+					this.executeDeploy("com.openfaas.scale.zero=true");
+					this.serverless.cli.log(`Scale to zero active`)
+				} else if (this.options.push) {
+					this.serverless.cli.log(`Scale to zero disabled`);
+					this.executeDeploy();
+				} else {
+					BbPromise.bind(this).then(this.deployFunction);
+				}
+			}),
 			'deploy:function:function': (() => {
-        if (this.options.push) {
-          BbPromise.bind(this).then(this.pushSingleFunction).then(this.deploySingleFunction);
-        } else {
-          BbPromise.bind(this).then(this.deploySingleFunction);
-        }
-      }),
+				if (this.options.push) {
+					BbPromise.bind(this).then(this.pushSingleFunction).then(this.deploySingleFunction);
+				} else {
+					BbPromise.bind(this).then(this.deploySingleFunction);
+				}
+			}),
 			'deploy:list:list': () => BbPromise.bind(this).then(this.deployList)
 		};
 	}
 
-	deployFunction() {
-		return new BbPromise(resolve => {
+	executeDeploy(lable = null) {
+		const executeTask = async () => {
+			const task1 = await this.packageFunction();
+			const task2 = await this.pushFunction();
+			if (lable == null) {
+				const task3 = await this.deployFunction();
+			} else {
+				const task3 = await this.deployFunction(lable);
+			}
+		};
+		executeTask();
+	}
 
-			const faasCli = spawn('faas-cli', [
+	deployFunction(lable) {
+		let faasCli;
+		if (lable == null) {
+			faasCli = spawn('faas-cli', [
 				'deploy',
 				'-f', './serverless.yml'
 			]);
+		} else {
+			faasCli = spawn('faas-cli', [
+				'deploy',
+				'-f', './serverless.yml',
+				'-lable', lable
+			]);
+		}
+		 
 
-			promisify(faasCli, this)
-				.then(res => this.serverless.cli.log(`Function(s) deployed...`))
-				.then(() => resolve())
-				.catch(err => this.serverless.cli.log(err));
-
-			listeners(faasCli);
-		});
+		promisify(faasCli, this)
+			.then(res => this.serverless.cli.log(`Function(s) deployed...`))
+			.then(() => resolve())
+			.catch(err => this.serverless.cli.log(err));
+		listeners(faasCli);
 	}
 
 	deploySingleFunction() {
@@ -113,8 +146,24 @@ class OpenFaasDeploy {
 		});
 	}
 
+	packageFunction() {
+		return new Promise(resolve => {
+			const faasCli = spawn('serverless', [
+				'package'
+			]);
+
+			promisify(faasCli, this)
+				.then(res => this.serverless.cli.log(`Function(s) pushed...`))
+				.then(() => resolve())
+				.catch(err => this.serverless.cli.log(err));
+
+			listeners(faasCli);
+		});
+	}
+
 	pushFunction() {
-		return new BbPromise(resolve => {
+		return new Promise(resolve => {
+
 			const faasCli = spawn('faas-cli', [
 				'push',
 				'-f', './serverless.yml'
